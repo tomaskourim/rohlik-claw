@@ -39,6 +39,24 @@ When working as a sub-agent or teammate, only use `send_message` if instructed t
 
 Files you create are saved in `/workspace/group/`. Use this for notes, research, or anything that should persist.
 
+## Grocery Memory
+
+Structured grocery data is stored in `/workspace/group/grocery/`. Always check these files before building a grocery order. Update them after analyzing deliveries or learning new preferences.
+
+| File | Purpose |
+|------|---------|
+| `grocery/preferences.md` | Taste profile, liked/disliked items, brand preferences, dietary restrictions |
+| `grocery/staples.md` | Always-buy items with typical quantities and frequency |
+| `grocery/patterns.md` | Co-purchase patterns, seasonal trends, order frequency stats |
+| `grocery/household.md` | Household size, dietary needs, budget range |
+| `grocery/fridge-state.md` | Estimated current fridge/pantry contents + calibrated consumption rates |
+| `grocery/delivery-log.md` | Compact processed delivery summaries |
+| `grocery/spending.md` | Average order cost, spending trends |
+| `grocery/meals.md` | Favorite meals, last cooked dates, required ingredients |
+| `grocery/planning-feedback.md` | Tracked user corrections during planning (promotes to preferences after 3+ repeats) |
+
+If these files don't exist yet, bootstrap them by analyzing order history (see the `grocery-memory` skill).
+
 ## Memory
 
 The `conversations/` folder contains searchable history of past conversations. Use this to recall context from previous sessions.
