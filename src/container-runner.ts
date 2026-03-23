@@ -28,6 +28,28 @@ import {
 import { detectAuthMode } from './credential-proxy.js';
 import { readEnvFile } from './env.js';
 import { validateAdditionalMounts } from './mount-security.js';
+
+/** Keys whose values must never appear in logs. */
+const SENSITIVE_ENV_KEYS = new Set([
+  'ROHLIK_PASSWORD',
+  'ROHLIK_USERNAME',
+  'CLAUDE_CODE_OAUTH_TOKEN',
+]);
+
+/** Replace sensitive `-e KEY=value` pairs with `-e KEY=***`. */
+function redactContainerArgs(args: string[]): string {
+  return args
+    .map((arg, i) => {
+      if (i > 0 && args[i - 1] === '-e') {
+        const eqIdx = arg.indexOf('=');
+        if (eqIdx > 0 && SENSITIVE_ENV_KEYS.has(arg.slice(0, eqIdx))) {
+          return `${arg.slice(0, eqIdx)}=***`;
+        }
+      }
+      return arg;
+    })
+    .join(' ');
+}
 import { RegisteredGroup } from './types.js';
 
 // Sentinel markers for robust output parsing (must match agent-runner)
@@ -304,7 +326,7 @@ export async function runContainerAgent(
         (m) =>
           `${m.hostPath} -> ${m.containerPath}${m.readonly ? ' (ro)' : ''}`,
       ),
-      containerArgs: containerArgs.join(' '),
+      containerArgs: redactContainerArgs(containerArgs),
     },
     'Container mount configuration',
   );
@@ -534,7 +556,7 @@ export async function runContainerAgent(
         }
         logLines.push(
           `=== Container Args ===`,
-          containerArgs.join(' '),
+          redactContainerArgs(containerArgs),
           ``,
           `=== Mounts ===`,
           mounts
