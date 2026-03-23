@@ -26,6 +26,7 @@ import {
   stopContainer,
 } from './container-runtime.js';
 import { detectAuthMode } from './credential-proxy.js';
+import { readEnvFile } from './env.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
 
@@ -236,6 +237,21 @@ function buildContainerArgs(
     args.push('-e', 'ANTHROPIC_API_KEY=placeholder');
   } else {
     args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=placeholder');
+  }
+
+  // Rohlik MCP credentials (read from .env file, not process.env — NanoClaw
+  // deliberately keeps secrets out of process.env to avoid leaking to children)
+  const rohlikKeys = [
+    'ROHLIK_USERNAME',
+    'ROHLIK_PASSWORD',
+    'ROHLIK_BASE_URL',
+  ] as const;
+  const rohlikEnv = readEnvFile([...rohlikKeys]);
+  for (const key of rohlikKeys) {
+    const val = rohlikEnv[key] || process.env[key];
+    if (val) {
+      args.push('-e', `${key}=${val}`);
+    }
   }
 
   // Runtime-specific args for host gateway resolution
