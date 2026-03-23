@@ -276,6 +276,9 @@ function buildContainerArgs(
     }
   }
 
+  // Allow containers to use swap memory to avoid OOM kills (exit 137)
+  args.push('--memory-swap', '-1');
+
   // Runtime-specific args for host gateway resolution
   args.push(...hostGatewayArgs());
 
