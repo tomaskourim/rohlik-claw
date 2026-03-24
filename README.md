@@ -22,6 +22,8 @@ The agent learns your shopping habits over time — it tracks what you buy, esti
 - **Full Rohlik integration** — search products, add to cart, check delivery slots, browse discounts, view order history
 - **Grocery memory** — learns your preferences, staple items, brand loyalty, and dietary restrictions from delivery history
 - **Fridge tracking** — estimates what you have at home based on deliveries and consumption rates, with self-calibrating accuracy
+- **Receipt scanning** — send a photo of a grocery receipt from any store (Albert, Lidl, Tesco, etc.) to update your fridge inventory with non-Rohlik purchases
+- **Image understanding** — the agent can see and understand photos sent via WhatsApp
 - **Shopping planner** — builds optimized orders combining fridge state, preferences, promotions, and meal planning
 - **Meal suggestions** — recommends meals based on what's in your fridge and what you like to cook
 - **Multi-channel messaging** — talk to your assistant from WhatsApp, Telegram, Discord, Slack, or Gmail
@@ -68,6 +70,7 @@ Talk to the assistant with the trigger word (default: `@Andy`):
 @Andy suggest some meals for this week
 @Andy check what's on sale from the stuff we usually buy
 @Andy order groceries for 5 days, we're having guests on Saturday
+[photo of a receipt from Albert] @Andy add these to my fridge
 ```
 
 ### Order Types
@@ -113,6 +116,7 @@ The Rohlik MCP server is installed inside the agent container at build time. Cre
 | `grocery-memory` | Analyzes delivery history, extracts preferences, maintains grocery profile |
 | `shopping-planner` | Orchestrates full order workflow with parallel subagents |
 | `fridge-tracker` | Estimates current fridge/pantry contents using consumption models |
+| `receipt-scanner` | Extracts items from store receipt photos and updates fridge state |
 
 ### Key Files
 
