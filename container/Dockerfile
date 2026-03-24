@@ -33,6 +33,13 @@ ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
 # Install agent-browser and claude-code globally
 RUN npm install -g agent-browser @anthropic-ai/claude-code
 
+# Install rohlik-mcp from source (requires build step)
+# Use npm pack to create a self-contained tarball so the source can be removed.
+RUN git clone https://github.com/tomaspavlin/rohlik-mcp.git /tmp/rohlik-mcp \
+    && cd /tmp/rohlik-mcp && npm install && npm run build \
+    && npm pack && npm install -g ./*.tgz \
+    && rm -rf /tmp/rohlik-mcp
+
 # Create app directory
 WORKDIR /app
 
