@@ -61,6 +61,51 @@ ROHLIK_BASE_URL=https://www.rohlik.cz
 
 ## Usage
 
+### Run it in the background
+
+NanoClaw runs as a systemd user service (`nanoclaw.service`), installed by `/setup`. Once enabled, it starts automatically on login and restarts on crash.
+
+```bash
+systemctl --user start nanoclaw      # start
+systemctl --user stop nanoclaw       # stop
+systemctl --user restart nanoclaw    # restart
+systemctl --user status nanoclaw     # current state + recent log lines
+systemctl --user is-active nanoclaw  # one-word: "active" / "inactive"
+systemctl --user is-enabled nanoclaw # "enabled" = starts on login
+```
+
+On macOS the equivalent is launchd — see [CLAUDE.md](CLAUDE.md#development) for `launchctl` commands.
+
+By default systemd user services stop when you log out. To keep NanoClaw running across logouts (e.g. on a headless machine):
+
+```bash
+sudo loginctl enable-linger $USER
+```
+
+### Watch it
+
+**Host process logs.** The systemd unit redirects stdout/stderr to log files in `logs/`, so app output does NOT show up in `journalctl` — only systemd lifecycle events do. Tail the files instead:
+
+```bash
+tail -f logs/nanoclaw.log                          # normal activity
+tail -f logs/nanoclaw.error.log                    # errors
+tail -f logs/nanoclaw.log logs/nanoclaw.error.log  # both at once
+journalctl --user -u nanoclaw -f                   # only systemd start/stop/crash events
+```
+
+**Agent container logs.** Each conversation spawns an isolated container from the `nanoclaw-agent` image. To see what the agent is doing inside (tool calls, MCP traffic, Claude responses):
+
+```bash
+docker ps --filter "ancestor=nanoclaw-agent"            # currently running agents
+docker ps -a --filter "ancestor=nanoclaw-agent"         # include exited ones
+docker logs -f $(docker ps -q --filter "ancestor=nanoclaw-agent" | head -1)   # follow newest running agent
+docker logs --tail 200 <container-name>                 # last 200 lines of a specific one
+docker exec -it <container-name> bash                   # shell into a running agent (= Docker Desktop "open terminal")
+```
+
+
+
+
 Talk to the assistant with the trigger word (default: `@Andy`):
 
 ```
@@ -108,6 +153,23 @@ Channels --> SQLite --> Polling loop --> Container (Claude Agent SDK + Rohlik MC
 ```
 
 The Rohlik MCP server is installed inside the agent container at build time. Credentials are passed as environment variables from `.env` through the container runner. The agent has access to all `mcp__rohlik__*` tools for interacting with Rohlik's API.
+
+### Container lifecycle
+
+Two layers with very different lifetimes:
+
+1. **Host orchestrator** — the `node dist/index.js` process under systemd. Always on. Polls channels every 2s, watches IPC, runs the scheduler, routes outbound messages.
+2. **Agent containers** — `nanoclaw-agent:latest` instances, spawned **on demand, per group** when a message arrives. Started with `docker run -i --rm` so they auto-delete on exit.
+
+After replying, a container does NOT exit immediately. It stays warm for `IDLE_TIMEOUT` (default **30 min**, configurable via env — see `src/config.ts`) so follow-up messages reuse the same container instead of paying a cold start every time. After the idle period it self-terminates and Docker removes it.
+
+One container per active group, not per message. Different groups get fully isolated containers (separate `.claude/` sessions, IPC dir, group folder mount).
+
+**Security boundaries:**
+- Project root is mounted **read-only** into the main group's container — the agent can read source but can't modify the host app.
+- `.env` is shadowed with `/dev/null`; the container never reads secrets from the mounted file.
+- All Anthropic API traffic is routed through a **credential proxy** on the host (port `3001`). The container only ever sees `ANTHROPIC_API_KEY=placeholder`; the proxy swaps in the real key on outgoing requests.
+- Rohlik credentials *are* injected as env vars (the MCP server needs them).
 
 ### Container Skills
 
