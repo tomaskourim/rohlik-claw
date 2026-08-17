@@ -94,7 +94,9 @@ export class WhatsAppChannel implements Channel {
         exec(
           `osascript -e 'display notification "${msg}" with title "NanoClaw" sound name "Basso"'`,
         );
-        setTimeout(() => process.exit(1), 1000);
+        // exit 3 = manual re-auth required; systemd won't auto-restart
+        // (RestartPreventExitStatus=3) and fires an email alert instead.
+        setTimeout(() => process.exit(3), 1000);
       }
 
       if (connection === 'close') {
@@ -116,7 +118,9 @@ export class WhatsAppChannel implements Channel {
           this.scheduleReconnect(1);
         } else {
           logger.info('Logged out. Run /setup to re-authenticate.');
-          process.exit(0);
+          // exit 3 = manual re-auth required; systemd won't auto-restart
+          // (RestartPreventExitStatus=3) and fires an email alert instead.
+          process.exit(3);
         }
       } else if (connection === 'open') {
         this.connected = true;
