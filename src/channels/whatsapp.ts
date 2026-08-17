@@ -32,6 +32,18 @@ import { registerChannel, ChannelOpts } from './registry.js';
 
 const GROUP_SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
+// Baileys fetches the WA Web version with a bare fetch() that has no timeout.
+// A half-open connection there hangs connectInternal forever, silently killing
+// the reconnect chain, so we impose our own deadline.
+const VERSION_FETCH_TIMEOUT_MS = 15 * 1000;
+
+const RECONNECT_BASE_DELAY_MS = 5 * 1000;
+const RECONNECT_MAX_DELAY_MS = 5 * 60 * 1000;
+
+// If we go this long without an open connection, the socket is wedged in a way
+// retrying hasn't fixed. Exit non-3 so systemd restarts us from scratch.
+const STALL_TIMEOUT_MS = 10 * 60 * 1000;
+
 export interface WhatsAppChannelOpts {
   onMessage: OnInboundMessage;
   onChatMetadata: OnChatMetadata;
@@ -47,6 +59,10 @@ export class WhatsAppChannel implements Channel {
   private outgoingQueue: Array<{ jid: string; text: string }> = [];
   private flushing = false;
   private groupSyncTimerStarted = false;
+  private reconnectAttempt = 0;
+  private reconnectTimer?: NodeJS.Timeout;
+  private stallTimer?: NodeJS.Timeout;
+  private shuttingDown = false;
 
   private opts: WhatsAppChannelOpts;
 
@@ -61,12 +77,22 @@ export class WhatsAppChannel implements Channel {
   }
 
   private async connectInternal(onFirstOpen?: () => void): Promise<void> {
+    // Drop the previous socket up front. Its listeners must not be able to
+    // start a competing reconnect chain while we set the replacement up.
+    this.teardownSocket();
+
+    // Anything below here can stall on the network, and a stalled setup emits
+    // no events at all — arm the watchdog before we start awaiting.
+    this.armStallWatchdog();
+
     const authDir = path.join(STORE_DIR, 'auth');
     fs.mkdirSync(authDir, { recursive: true });
 
     const { state, saveCreds } = await useMultiFileAuthState(authDir);
 
-    const { version } = await fetchLatestWaWebVersion({}).catch((err) => {
+    const { version } = await fetchLatestWaWebVersion({
+      signal: AbortSignal.timeout(VERSION_FETCH_TIMEOUT_MS),
+    }).catch((err) => {
       logger.warn(
         { err },
         'Failed to fetch latest WA Web version, using default',
@@ -115,7 +141,8 @@ export class WhatsAppChannel implements Channel {
         );
 
         if (shouldReconnect) {
-          this.scheduleReconnect(1);
+          this.armStallWatchdog();
+          this.scheduleReconnect();
         } else {
           logger.info('Logged out. Run /setup to re-authenticate.');
           // exit 3 = manual re-auth required; systemd won't auto-restart
@@ -124,6 +151,8 @@ export class WhatsAppChannel implements Channel {
         }
       } else if (connection === 'open') {
         this.connected = true;
+        this.reconnectAttempt = 0;
+        this.clearStallWatchdog();
         logger.info('Connected to WhatsApp');
 
         // Announce availability so WhatsApp relays subsequent presence updates (typing indicators)
@@ -303,7 +332,13 @@ export class WhatsAppChannel implements Channel {
   }
 
   async disconnect(): Promise<void> {
+    this.shuttingDown = true;
     this.connected = false;
+    this.clearStallWatchdog();
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = undefined;
+    }
     this.sock?.end(undefined);
   }
 
@@ -357,15 +392,82 @@ export class WhatsAppChannel implements Channel {
     }
   }
 
-  private scheduleReconnect(attempt: number): void {
-    const delayMs = Math.min(5000 * Math.pow(2, attempt - 1), 300000);
+  /**
+   * Schedule a reconnect with exponential backoff.
+   *
+   * The attempt counter lives on the instance rather than being passed in:
+   * the retry loop re-enters through the 'close' handler rather than through
+   * the catch below (Baileys reports connection failures as close events, not
+   * as rejections), so a parameter would reset to 1 on every attempt and pin
+   * the delay at the 5s floor forever.
+   */
+  private scheduleReconnect(): void {
+    if (this.shuttingDown) return;
+    if (this.reconnectTimer) {
+      logger.debug('Reconnect already pending, not scheduling another');
+      return;
+    }
+
+    this.reconnectAttempt += 1;
+    const attempt = this.reconnectAttempt;
+    const delayMs = Math.min(
+      RECONNECT_BASE_DELAY_MS * Math.pow(2, attempt - 1),
+      RECONNECT_MAX_DELAY_MS,
+    );
     logger.info({ attempt, delayMs }, 'Reconnecting...');
-    setTimeout(() => {
+
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = undefined;
+      if (this.shuttingDown) return;
       this.connectInternal().catch((err) => {
         logger.error({ err, attempt }, 'Reconnection attempt failed');
-        this.scheduleReconnect(attempt + 1);
+        this.scheduleReconnect();
       });
     }, delayMs);
+  }
+
+  /**
+   * Detach and end the current socket so it cannot emit into handlers that
+   * belong to a connection we have already given up on.
+   */
+  private teardownSocket(): void {
+    if (!this.sock) return;
+    try {
+      this.sock.ev.removeAllListeners('connection.update');
+      this.sock.ev.removeAllListeners('creds.update');
+      this.sock.ev.removeAllListeners('messages.upsert');
+      this.sock.end(undefined);
+    } catch (err) {
+      logger.debug({ err }, 'Error tearing down previous socket');
+    }
+  }
+
+  /**
+   * Guard against silent stalls: a wedged socket keeps the process alive and
+   * healthy-looking while delivering nothing, which systemd cannot detect.
+   *
+   * Deliberately idempotent — it measures time since we last had a working
+   * connection, not time since the last attempt. Rearming per attempt would
+   * let an endlessly failing reconnect loop hold it off forever.
+   */
+  private armStallWatchdog(): void {
+    if (this.shuttingDown || this.stallTimer) return;
+    this.stallTimer = setTimeout(() => {
+      logger.error(
+        { stallMs: STALL_TIMEOUT_MS },
+        'No WhatsApp connection for too long, exiting for a clean restart',
+      );
+      process.exit(1);
+    }, STALL_TIMEOUT_MS);
+    // Never hold the process open just for the watchdog.
+    this.stallTimer.unref?.();
+  }
+
+  private clearStallWatchdog(): void {
+    if (this.stallTimer) {
+      clearTimeout(this.stallTimer);
+      this.stallTimer = undefined;
+    }
   }
 
   private async translateJid(jid: string): Promise<string> {
