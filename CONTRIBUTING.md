@@ -93,6 +93,29 @@ Skills that run inside the agent container, not on the host. These teach the con
 - Use `allowed-tools` frontmatter to scope tool permissions
 - Keep them focused — the agent's context window is shared across all container skills
 
+## Container subagents
+
+Not a skill type. A skill is instructions loaded into the container agent's own context;
+a **subagent** runs in a context of its own, on a model of its own. Reach for one when a
+task should run on a different tier than the main loop — bulk reading on a cheaper model,
+hard planning on a stronger one — without switching the main loop's model and voiding its
+prompt cache.
+
+**Location:** `container/agents/<name>.md` — one flat Markdown file per agent, not a
+directory. Synced into each group's `.claude/agents/` when a container starts, the same way
+container skills are.
+
+**Format:** YAML frontmatter (`name`, `description`, `model`, `tools`) followed by the
+agent's system prompt.
+
+**Guidelines:**
+- The `description` is what the main agent reads when deciding whom to delegate to — say
+  what the agent is good at and what to hand it, not just what it is
+- Scope `tools` to what the agent actually needs
+- Write the prompt for an agent that cannot ask follow-up questions: a subagent gets one
+  self-contained task and reports back
+- Prefer a skill when the task doesn't need its own model or its own context window
+
 ### SKILL.md format
 
 All skills use the [Claude Code skills standard](https://code.claude.com/docs/en/skills):

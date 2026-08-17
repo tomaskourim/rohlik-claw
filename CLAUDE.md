@@ -20,6 +20,7 @@ Single Node.js process with skill-based channel system. Channels (WhatsApp, Tele
 | `src/db.ts` | SQLite operations |
 | `groups/{name}/CLAUDE.md` | Per-group memory (isolated) |
 | `container/skills/` | Skills loaded inside agent containers (browser, status, formatting) |
+| `container/agents/` | Subagent definitions synced into agent containers (each picks its own model) |
 
 ## Skills
 
@@ -29,6 +30,10 @@ Four types of skills exist in NanoClaw. See [CONTRIBUTING.md](CONTRIBUTING.md) f
 - **Utility skills** — ship code files alongside SKILL.md (e.g. `/claw`)
 - **Operational skills** — instruction-only workflows, always on `main` (e.g. `/setup`, `/debug`)
 - **Container skills** — loaded inside agent containers at runtime (`container/skills/`)
+
+Subagents are a separate mechanism from skills: a skill is instructions loaded into the
+agent's own context, while a subagent runs in its own context on its own model. Definitions
+live in `container/agents/` — see [CONTRIBUTING.md](CONTRIBUTING.md#container-subagents).
 
 | Skill | When to Use |
 |-------|-------------|
