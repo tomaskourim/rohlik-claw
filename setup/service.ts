@@ -241,8 +241,11 @@ After=network.target
 Type=simple
 ExecStart=${nodePath} ${projectRoot}/dist/index.js
 WorkingDirectory=${projectRoot}
-Restart=always
+Restart=on-failure
 RestartSec=5
+# exit 3 = "manual re-auth required" (WhatsApp logout). Restarting can never
+# recover it, so don't try — let the unit fail instead of crash-looping.
+RestartPreventExitStatus=3
 KillMode=process
 Environment=HOME=${homeDir}
 Environment=PATH=/usr/local/bin:/usr/bin:/bin:${homeDir}/.local/bin

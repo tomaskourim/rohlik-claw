@@ -63,6 +63,9 @@ function createFakeSocket() {
       on: (event: string, handler: (...args: unknown[]) => void) => {
         ev.on(event, handler);
       },
+      removeAllListeners: vi.fn((event: string) => {
+        ev.removeAllListeners(event);
+      }),
     },
     user: {
       id: '1234567890:1@s.whatsapp.net',
@@ -115,6 +118,7 @@ import { WhatsAppChannel, WhatsAppChannelOpts } from './whatsapp.js';
 import { downloadMediaMessage } from '@whiskeysockets/baileys';
 import { getLastGroupSync, updateChatName, setLastGroupSync } from '../db.js';
 import { isImageMessage, processImage } from '../image.js';
+import { logger } from '../logger.js';
 
 // --- Test helpers ---
 
@@ -161,9 +165,13 @@ describe('WhatsAppChannel', () => {
   beforeEach(() => {
     fakeSocket = createFakeSocket();
     vi.mocked(getLastGroupSync).mockReturnValue(null);
+    vi.mocked(logger.info).mockClear();
   });
 
   afterEach(() => {
+    // Must run even when a test fails mid-way: leaked fake timers make every
+    // subsequent test hang on the microtask flush in connectChannel.
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -179,6 +187,22 @@ describe('WhatsAppChannel', () => {
     return p;
   }
 
+  /** connectChannel for tests running under vi.useFakeTimers(). */
+  async function connectChannelFake(channel: WhatsAppChannel): Promise<void> {
+    const p = channel.connect();
+    await vi.advanceTimersByTimeAsync(0);
+    triggerConnection('open');
+    return p;
+  }
+
+  /** Every "Reconnecting..." log entry, in order. */
+  function reconnectLogs(): Array<{ attempt: number; delayMs: number }> {
+    return vi
+      .mocked(logger.info)
+      .mock.calls.filter((call) => call[1] === 'Reconnecting...')
+      .map((call) => call[0] as { attempt: number; delayMs: number });
+  }
+
   // --- Version fetch ---
 
   describe('version fetch', () => {
@@ -189,7 +213,25 @@ describe('WhatsAppChannel', () => {
 
       const { fetchLatestWaWebVersion } =
         await import('@whiskeysockets/baileys');
-      expect(fetchLatestWaWebVersion).toHaveBeenCalledWith({});
+      expect(fetchLatestWaWebVersion).toHaveBeenCalledWith(
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
+    });
+
+    it('bounds the version fetch with an abort signal', async () => {
+      const opts = createTestOpts();
+      const channel = new WhatsAppChannel(opts);
+      await connectChannel(channel);
+
+      // Baileys calls fetch() with no timeout of its own; without a signal a
+      // half-open connection hangs connectInternal forever and silently kills
+      // the reconnect chain.
+      const { fetchLatestWaWebVersion } =
+        await import('@whiskeysockets/baileys');
+      const { signal } = vi.mocked(fetchLatestWaWebVersion).mock
+        .calls[0][0] as RequestInit;
+      expect(signal).toBeInstanceOf(AbortSignal);
+      expect(signal?.aborted).toBe(false);
     });
 
     it('falls back gracefully when version fetch fails', async () => {
@@ -290,7 +332,8 @@ describe('WhatsAppChannel', () => {
       // Advance timer past the 1000ms setTimeout before exit
       await vi.advanceTimersByTimeAsync(1500);
 
-      expect(mockExit).toHaveBeenCalledWith(1);
+      // exit 3 = manual re-auth required; systemd must not auto-restart
+      expect(mockExit).toHaveBeenCalledWith(3);
       mockExit.mockRestore();
       vi.useRealTimers();
     });
@@ -328,21 +371,224 @@ describe('WhatsAppChannel', () => {
       triggerDisconnect(401);
 
       expect(channel.isConnected()).toBe(false);
-      expect(mockExit).toHaveBeenCalledWith(0);
+      // exit 3 = manual re-auth required; systemd must not auto-restart
+      expect(mockExit).toHaveBeenCalledWith(3);
       mockExit.mockRestore();
     });
 
     it('retries reconnection after 5s on failure', async () => {
+      vi.useFakeTimers();
       const opts = createTestOpts();
       const channel = new WhatsAppChannel(opts);
 
-      await connectChannel(channel);
+      await connectChannelFake(channel);
 
       // Disconnect with stream error 515
       triggerDisconnect(515);
 
-      // The channel sets a 5s retry — just verify it doesn't crash
-      await new Promise((r) => setTimeout(r, 100));
+      expect(reconnectLogs()).toEqual([{ attempt: 1, delayMs: 5000 }]);
+
+      await vi.advanceTimersByTimeAsync(5000);
+      await channel.disconnect();
+    });
+
+    it('escalates the backoff across consecutive disconnects', async () => {
+      vi.useFakeTimers();
+      const opts = createTestOpts();
+      const channel = new WhatsAppChannel(opts);
+
+      await connectChannelFake(channel);
+
+      // Baileys surfaces failed reconnects as close events, not as rejections
+      // from connectInternal, so this is the path the retry loop really takes.
+      for (const expected of [5000, 10000, 20000]) {
+        triggerDisconnect(428);
+        expect(reconnectLogs().at(-1)?.delayMs).toBe(expected);
+        await vi.advanceTimersByTimeAsync(expected);
+      }
+
+      expect(reconnectLogs().map((l) => l.attempt)).toEqual([1, 2, 3]);
+      await channel.disconnect();
+    });
+
+    it('caps the backoff at 5 minutes', async () => {
+      vi.useFakeTimers();
+      // Reaching the cap takes longer than the stall timeout, so the watchdog
+      // fires partway through — irrelevant here, but it must not kill the run.
+      const mockExit = vi
+        .spyOn(process, 'exit')
+        .mockImplementation(() => undefined as never);
+
+      const opts = createTestOpts();
+      const channel = new WhatsAppChannel(opts);
+
+      await connectChannelFake(channel);
+
+      for (let i = 0; i < 12; i++) {
+        triggerDisconnect(428);
+        await vi.advanceTimersByTimeAsync(reconnectLogs().at(-1)!.delayMs);
+      }
+
+      expect(reconnectLogs().at(-1)?.delayMs).toBe(5 * 60 * 1000);
+      mockExit.mockRestore();
+      await channel.disconnect();
+    });
+
+    it('resets the backoff after a successful reconnect', async () => {
+      vi.useFakeTimers();
+      const opts = createTestOpts();
+      const channel = new WhatsAppChannel(opts);
+
+      await connectChannelFake(channel);
+
+      triggerDisconnect(428);
+      await vi.advanceTimersByTimeAsync(5000);
+      triggerDisconnect(428);
+      expect(reconnectLogs().at(-1)?.delayMs).toBe(10000);
+
+      // Reconnect succeeds
+      await vi.advanceTimersByTimeAsync(10000);
+      triggerConnection('open');
+      expect(channel.isConnected()).toBe(true);
+
+      // Next failure starts from the floor again
+      triggerDisconnect(428);
+      expect(reconnectLogs().at(-1)).toEqual({ attempt: 1, delayMs: 5000 });
+      await channel.disconnect();
+    });
+
+    it('ignores repeat close events while a reconnect is pending', async () => {
+      vi.useFakeTimers();
+      const opts = createTestOpts();
+      const channel = new WhatsAppChannel(opts);
+
+      await connectChannelFake(channel);
+
+      triggerDisconnect(428);
+      triggerDisconnect(428);
+      triggerDisconnect(428);
+
+      // One pending timer only — parallel chains would each spawn sockets.
+      expect(reconnectLogs()).toEqual([{ attempt: 1, delayMs: 5000 }]);
+      await channel.disconnect();
+    });
+
+    it('tears down the previous socket before replacing it', async () => {
+      vi.useFakeTimers();
+      const opts = createTestOpts();
+      const channel = new WhatsAppChannel(opts);
+
+      await connectChannelFake(channel);
+
+      const oldSocket = fakeSocket;
+      triggerDisconnect(428);
+
+      // The reconnect builds a fresh socket; the old one must be detached so
+      // it can no longer drive the reconnect chain.
+      fakeSocket = createFakeSocket();
+      await vi.advanceTimersByTimeAsync(5000);
+
+      expect(oldSocket.ev.removeAllListeners).toHaveBeenCalledWith(
+        'connection.update',
+      );
+      expect(oldSocket.end).toHaveBeenCalled();
+
+      // A late event from the dead socket must not schedule another reconnect.
+      const before = reconnectLogs().length;
+      oldSocket._ev.emit('connection.update', {
+        connection: 'close',
+        lastDisconnect: { error: { output: { statusCode: 428 } } },
+      });
+      expect(reconnectLogs().length).toBe(before);
+      await channel.disconnect();
+    });
+  });
+
+  // --- Stall watchdog ---
+
+  describe('stall watchdog', () => {
+    const STALL_TIMEOUT_MS = 10 * 60 * 1000;
+
+    it('exits for a clean restart when disconnected too long', async () => {
+      vi.useFakeTimers();
+      const mockExit = vi
+        .spyOn(process, 'exit')
+        .mockImplementation(() => undefined as never);
+
+      const opts = createTestOpts();
+      const channel = new WhatsAppChannel(opts);
+      await connectChannelFake(channel);
+
+      triggerDisconnect(428);
+      await vi.advanceTimersByTimeAsync(STALL_TIMEOUT_MS + 1000);
+
+      // exit 1, not 3 — this one is recoverable, so systemd should restart us.
+      expect(mockExit).toHaveBeenCalledWith(1);
+      mockExit.mockRestore();
+      await channel.disconnect();
+    });
+
+    it('does not exit while the connection is healthy', async () => {
+      vi.useFakeTimers();
+      const mockExit = vi
+        .spyOn(process, 'exit')
+        .mockImplementation(() => undefined as never);
+
+      const opts = createTestOpts();
+      const channel = new WhatsAppChannel(opts);
+      await connectChannelFake(channel);
+
+      await vi.advanceTimersByTimeAsync(STALL_TIMEOUT_MS * 2);
+
+      expect(mockExit).not.toHaveBeenCalled();
+      mockExit.mockRestore();
+      await channel.disconnect();
+    });
+
+    it('disarms once the connection comes back', async () => {
+      vi.useFakeTimers();
+      const mockExit = vi
+        .spyOn(process, 'exit')
+        .mockImplementation(() => undefined as never);
+
+      const opts = createTestOpts();
+      const channel = new WhatsAppChannel(opts);
+      await connectChannelFake(channel);
+
+      triggerDisconnect(428);
+      await vi.advanceTimersByTimeAsync(5000);
+      triggerConnection('open');
+
+      await vi.advanceTimersByTimeAsync(STALL_TIMEOUT_MS + 1000);
+
+      expect(mockExit).not.toHaveBeenCalled();
+      mockExit.mockRestore();
+      await channel.disconnect();
+    });
+
+    it('is not held off by a failing reconnect loop', async () => {
+      vi.useFakeTimers();
+      const mockExit = vi
+        .spyOn(process, 'exit')
+        .mockImplementation(() => undefined as never);
+
+      const opts = createTestOpts();
+      const channel = new WhatsAppChannel(opts);
+      await connectChannelFake(channel);
+
+      // Reconnect attempts that never reach 'open' must not keep rearming the
+      // watchdog — it measures time since we last had a working connection.
+      let elapsed = 0;
+      while (elapsed < STALL_TIMEOUT_MS + 1000) {
+        triggerDisconnect(428);
+        const delay = reconnectLogs().at(-1)!.delayMs;
+        await vi.advanceTimersByTimeAsync(delay);
+        elapsed += delay;
+      }
+
+      expect(mockExit).toHaveBeenCalledWith(1);
+      mockExit.mockRestore();
+      await channel.disconnect();
     });
   });
 
