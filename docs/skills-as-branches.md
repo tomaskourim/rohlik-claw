@@ -13,6 +13,10 @@ NanoClaw has four types of skills overall. See [CONTRIBUTING.md](../CONTRIBUTING
 | **Operational** | `.claude/skills/` on `main` | Instruction-only workflows (setup, debug, update) |
 | **Container** | `container/skills/` | Loaded inside agent containers at runtime |
 
+Container **subagents** (`container/agents/<name>.md`) are not a skill type — they run in
+their own context on their own model, and are synced into agent containers the same way
+container skills are. See [CONTRIBUTING.md](../CONTRIBUTING.md#container-subagents).
+
 ---
 
 Feature skills are distributed as git branches on the upstream repository. Applying a skill is a `git merge`. Updating core is a `git merge`. Everything is standard git.

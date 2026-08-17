@@ -39,6 +39,10 @@ export const DATA_DIR = path.resolve(PROJECT_ROOT, 'data');
 
 export const CONTAINER_IMAGE =
   process.env.CONTAINER_IMAGE || 'nanoclaw-agent:latest';
+// Model for a group's main agent loop. Subagents in container/agents/ override
+// this per task, so heavier or cheaper work doesn't move the main loop.
+export const DEFAULT_AGENT_MODEL =
+  process.env.DEFAULT_AGENT_MODEL || 'claude-sonnet-5';
 export const CONTAINER_TIMEOUT = parseInt(
   process.env.CONTAINER_TIMEOUT || '1800000',
   10,

@@ -190,6 +190,7 @@ One container per active group, not per message. Different groups get fully isol
 | `container/agent-runner/src/index.ts` | Agent SDK config with Rohlik MCP server |
 | `groups/global/CLAUDE.md` | Agent persona and behavior instructions |
 | `container/skills/` | Container skills (grocery-memory, shopping-planner, fridge-tracker) |
+| `container/agents/` | Container subagents (product-scout on Haiku, meal-planner on Opus) |
 
 ## Customizing
 

@@ -12,6 +12,7 @@ import {
   CONTAINER_TIMEOUT,
   CREDENTIAL_PROXY_PORT,
   DATA_DIR,
+  DEFAULT_AGENT_MODEL,
   GROUPS_DIR,
   IDLE_TIMEOUT,
   TIMEZONE,
@@ -147,11 +148,27 @@ function buildVolumeMounts(
   );
   fs.mkdirSync(groupSessionsDir, { recursive: true });
   const settingsFile = path.join(groupSessionsDir, 'settings.json');
-  if (!fs.existsSync(settingsFile)) {
+  if (fs.existsSync(settingsFile)) {
+    // Backfill the model for groups created before it was configurable, without
+    // touching a value the user has since chosen for themselves.
+    try {
+      const existing = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+      if (!existing.model) {
+        existing.model = DEFAULT_AGENT_MODEL;
+        fs.writeFileSync(
+          settingsFile,
+          JSON.stringify(existing, null, 2) + '\n',
+        );
+      }
+    } catch (err) {
+      logger.warn({ err, settingsFile }, 'Could not read group settings.json');
+    }
+  } else {
     fs.writeFileSync(
       settingsFile,
       JSON.stringify(
         {
+          model: DEFAULT_AGENT_MODEL,
           env: {
             // Enable agent swarms (subagent orchestration)
             // https://code.claude.com/docs/en/agent-teams#orchestrate-teams-of-claude-code-sessions
@@ -179,6 +196,22 @@ function buildVolumeMounts(
       if (!fs.statSync(srcDir).isDirectory()) continue;
       const dstDir = path.join(skillsDst, skillDir);
       fs.cpSync(srcDir, dstDir, { recursive: true });
+    }
+  }
+
+  // Sync subagents from container/agents/ into each group's .claude/agents/.
+  // Each agent picks its own model, which is how a task runs on a cheaper or
+  // stronger tier without switching the main loop (and voiding its prompt cache).
+  const agentsSrc = path.join(process.cwd(), 'container', 'agents');
+  const agentsDst = path.join(groupSessionsDir, 'agents');
+  if (fs.existsSync(agentsSrc)) {
+    fs.mkdirSync(agentsDst, { recursive: true });
+    for (const agentFile of fs.readdirSync(agentsSrc)) {
+      if (!agentFile.endsWith('.md')) continue;
+      fs.copyFileSync(
+        path.join(agentsSrc, agentFile),
+        path.join(agentsDst, agentFile),
+      );
     }
   }
   mounts.push({
