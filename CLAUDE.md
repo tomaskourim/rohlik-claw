@@ -21,6 +21,7 @@ Single Node.js process with skill-based channel system. Channels (WhatsApp, Tele
 | `groups/{name}/CLAUDE.md` | Per-group memory (isolated) |
 | `container/skills/` | Skills loaded inside agent containers (browser, status, formatting) |
 | `container/agents/` | Subagent definitions synced into agent containers (each picks its own model) |
+| `groups/{name}/grocery/purchases.db` | Item-level purchase history (SQLite); written only via the `purchase-db` skill |
 
 ## Skills
 

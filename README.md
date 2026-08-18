@@ -179,6 +179,7 @@ One container per active group, not per message. Different groups get fully isol
 | `shopping-planner` | Orchestrates full order workflow with parallel subagents |
 | `fridge-tracker` | Estimates current fridge/pantry contents using consumption models |
 | `receipt-scanner` | Extracts items from store receipt photos and updates fridge state |
+| `purchase-db` | Item-level purchase history in SQLite — spend, price trends, staples |
 
 ### Key Files
 
@@ -189,7 +190,8 @@ One container per active group, not per message. Different groups get fully isol
 | `container/Dockerfile` | Container image with rohlik-mcp installed |
 | `container/agent-runner/src/index.ts` | Agent SDK config with Rohlik MCP server |
 | `groups/global/CLAUDE.md` | Agent persona and behavior instructions |
-| `container/skills/` | Container skills (grocery-memory, shopping-planner, fridge-tracker) |
+| `container/skills/` | Container skills (grocery-memory, shopping-planner, fridge-tracker, purchase-db) |
+| `groups/{name}/grocery/purchases.db` | Item-level purchase history (SQLite, built by `purchase-db`) |
 | `container/agents/` | Container subagents (product-scout on Haiku, meal-planner on Opus) |
 
 ## Customizing
