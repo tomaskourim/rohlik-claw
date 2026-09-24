@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 
 import {
+  ALLOW_NO_CHANNELS,
   ASSISTANT_NAME,
   CREDENTIAL_PROXY_PORT,
   IDLE_TIMEOUT,
@@ -615,8 +616,14 @@ async function main(): Promise<void> {
     await channel.connect();
   }
   if (channels.length === 0) {
-    logger.fatal('No channels connected');
-    process.exit(1);
+    if (!ALLOW_NO_CHANNELS) {
+      logger.fatal('No channels connected');
+      process.exit(1);
+    }
+    logger.warn(
+      'No channels connected — running headless (ALLOW_NO_CHANNELS=true). ' +
+        'Scheduled tasks still run, but their replies have nowhere to go and are dropped.',
+    );
   }
 
   // Start subsystems (independently of connection handler)
