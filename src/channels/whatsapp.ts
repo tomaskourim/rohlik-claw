@@ -532,4 +532,10 @@ export class WhatsAppChannel implements Channel {
   }
 }
 
-registerChannel('whatsapp', (opts: ChannelOpts) => new WhatsAppChannel(opts));
+registerChannel('whatsapp', (opts: ChannelOpts) => {
+  // No creds on disk means the device was never linked, or was unlinked from the
+  // phone. Connecting anyway only surfaces a QR and exits 3, so report the channel
+  // as unconfigured instead and let the rest of NanoClaw run until re-auth.
+  if (!fs.existsSync(path.join(STORE_DIR, 'auth', 'creds.json'))) return null;
+  return new WhatsAppChannel(opts);
+});
